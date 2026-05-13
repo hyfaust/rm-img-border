@@ -1,416 +1,236 @@
-# rm-border - 批量去除图片白边/透明边缘工具
+# rm-border — Batch Image Border Removal Tool
 
-一个功能完整的 Python 命令行工具，用于批量去除图像的白边或透明边缘，支持多种图像格式和矢量格式的光栅化处理。
+**English** | [中文](README_CN.md)
 
-## 特性
+A Python CLI tool for batch-removing borders and transparent edges from images. Supports raster formats, vector auto-rasterization, manual background-color matching, and intelligent auto-detection of border regions.
 
-✅ **多格式支持**
-- 光栅图像：PNG, JPG, BMP, TIFF, EMF
-- 矢量格式（自动光栅化）：PDF（第一页）、EPS、PS
+## Features
 
-✅ **智能边缘检测**
-- 自动检测 Alpha 透明通道
-- 支持自定义背景色检测（默认白色）
-- 可调节容差值以适应不同场景
+- **Multi-format support** — PNG, JPG, BMP, TIFF, EMF; auto-rasterized PDF (first page), EPS, PS
+- **Three detection modes** — Alpha-channel, background-color comparison, and `--auto` smart scan
+- **Tolerance control** — adjustable color-matching threshold for noisy or anti-aliased edges
+- **Per-side padding** — uniform or independent top/right/bottom/left margins
+- **Batch processing** — single file, whole directory, or recursive sub-directory traversal
+- **Regex rename** — extract and reassemble filename parts via capture groups
+- **High-quality rasterization** — configurable DPI with Ghostscript and ImageMagick backends
 
-✅ **灵活的边距控制**
-- 支持统一边距设置
-- 支持分别指定上、右、下、左边距
+## Installation
 
-✅ **强大的输出管理**
-- 默认输出到原文件同级目录
-- 自定义输出目录
-- 正则表达式重命名支持
-
-✅ **高质量矢量格式处理**
-- 默认 300 DPI 光栅化（可自定义）
-- 支持 Ghostscript 和 ImageMagick 双引擎
-
-## 安装
-
-### 1. Python 依赖
+### Python dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-或手动安装：
+Or manually:
 
 ```bash
 pip install Pillow>=10.0.0 pdf2image>=1.16.0 Wand>=0.6.11
 ```
 
-### 2. 系统级依赖
+### System dependencies
 
-#### Ghostscript（必需，用于 EPS/PS 处理）
+#### Ghostscript (required for EPS/PS)
 
-**Windows:**
-1. 下载：https://www.ghostscript.com/releases/gsdnld.html
-2. 安装后将 `bin` 目录添加到 PATH 环境变量
-3. 验证：`gswin64c --version`
+| Platform | Install |
+|----------|---------|
+| Windows  | Download from https://www.ghostscript.com/releases/gsdnld.html, add `bin` to PATH |
+| Linux    | `sudo apt-get install ghostscript` |
+| macOS    | `brew install ghostscript` |
 
-**Linux (Ubuntu/Debian):**
-```bash
-sudo apt-get install ghostscript
+Verify: `gswin64c --version` (Windows) or `gs --version` (Linux/macOS)
+
+#### Poppler (optional, for PDF)
+
+| Platform | Install |
+|----------|---------|
+| Windows  | Download from https://github.com/oschwartz10612/poppler-windows/releases/, add `bin` to PATH |
+| Linux    | `sudo apt-get install poppler-utils` |
+| macOS    | `brew install poppler` |
+
+#### ImageMagick + Wand (optional, for EPS/PS/EMF)
+
+| Platform | Install |
+|----------|---------|
+| Windows  | Download from https://imagemagick.org/script/download.php, enable "Install development headers", set `IMAGEMAGICK_BINARY` env var |
+| Linux    | `sudo apt-get install libmagickwand-dev && pip install Wand` |
+| macOS    | `brew install imagemagick && pip install Wand` |
+
+## Usage
+
+```
+python rm_border.py -i <file_or_directory> [options]
 ```
 
-**macOS:**
-```bash
-brew install ghostscript
-```
+### Command-line arguments
 
-#### Poppler（可选，用于 PDF 处理）
+| Long | Short | Description | Default |
+|------|-------|-------------|---------|
+| `--input` | `-i` | **(required)** Input file or directory | — |
+| `--output_dir` | `-o` | Output directory | Same as input |
+| `--background` | `-bg` | Background color in hex | `#FFFFFF` |
+| `--padding` | `-p` | Margin to keep (1 or 4 values: top right bottom left) | `0` |
+| `--dpi` | — | Rasterization DPI for vector formats | `300` |
+| `--rename_pattern` | — | Regex pattern for renaming | — |
+| `--rename_template` | — | Rename template (`{1}`, `{2}` for capture groups) | — |
+| `--recursive` | `-r` | Process sub-directories recursively | `False` |
+| `--format` | `-f` | Output format: png / jpg / jpeg / bmp / tiff | `png` |
+| `--tolerance` | `-t` | Background color tolerance | `10` |
+| `--auto` | `-a` | Smart border detection (ignores `--background`) | `False` |
+| `--verbose` | `-v` | Enable debug logging | `False` |
 
-**Windows:**
-1. 下载：https://github.com/oschwartz10612/poppler-windows/releases/
-2. 解压后将 `bin` 目录添加到 PATH 环境变量
-3. 验证：`pdfinfo -v`
+## Examples
 
-**Linux (Ubuntu/Debian):**
-```bash
-sudo apt-get install poppler-utils
-```
-
-**macOS:**
-```bash
-brew install poppler
-```
-
-#### ImageMagick + Wand（可选，用于 EPS/PS/EMF 处理）
-
-**Windows:**
-1. 下载：https://imagemagick.org/script/download.php
-2. 安装时勾选"安装开发头和库"
-3. 设置环境变量 `IMAGEMAGICK_BINARY` 指向 `magick.exe`
-
-**Linux (Ubuntu/Debian):**
-```bash
-sudo apt-get install libmagickwand-dev
-pip install Wand
-```
-
-**macOS:**
-```bash
-brew install imagemagick
-pip install Wand
-```
-
-## 使用方法
-
-### 基本语法
+### Basic
 
 ```bash
-python rm_border.py -i <输入文件或目录> [选项]
-```
-
-### 命令行参数
-
-| 参数 | 简写 | 说明 | 默认值 |
-|------|------|------|--------|
-| `--input` | `-i` | **（必需）** 输入文件或目录路径 | - |
-| `--output_dir` | `-o` | 输出目录 | 与输入文件同级 |
-| `--background` | `-bg` | 背景色（十六进制） | `#FFFFFF`（白色） |
-| `--padding` | `-p` | 保留边距（单值或四值） | `0` |
-| `--dpi` | - | 矢量格式光栅化 DPI | `300` |
-| `--rename_pattern` | - | 正则表达式模式 | - |
-| `--rename_template` | - | 重命名模板 | - |
-| `--recursive` | `-r` | 递归处理子目录 | `False` |
-| `--format` | `-f` | 输出格式（png/jpg/jpeg/bmp/tiff） | `png` |
-| `--tolerance` | `-t` | 背景色容差 | `10` |
-| `--verbose` | `-v` | 显示详细调试信息 | `False` |
-| `--auto` | `-a` | 智能识别边界颜色并去除 | `False` |
-
-## 使用示例
-
-### 1. 基本用法
-
-#### 去除单张图片白边
-
-```bash
+# Remove white border (default background)
 python rm_border.py -i image.png
-```
 
-输出：`image_processed.png`（同级目录）
+# Remove black border
+python rm_border.py -i image.png -bg #000000
 
-#### 去除黑边（指定背景色）
+# Keep 10 px margin on all sides
+python rm_border.py -i image.png -p 10
 
-```bash
-python rm_border.py -i image.png --background #000000
-```
-
-#### 保留 10 像素边距
-
-```bash
-python rm_border.py -i image.png --padding 10
-```
-
-#### 分别指定四边边距（上、右、下、左）
-
-```bash
+# Keep different margins (top right bottom left)
 python rm_border.py -i image.png -p 5 10 5 10
 ```
 
-### 2. 批量处理
-
-#### 处理整个目录
+### Batch
 
 ```bash
+# Process all images in a directory
 python rm_border.py -i ./images/
+
+# Recursive with custom output directory
+python rm_border.py -i ./project/ -r -o ./output/
+
+# Verbose logging
+python rm_border.py -i ./batch/ -o ./output/ -v
 ```
 
-#### 输出到指定目录
-
-```bash
-python rm_border.py -i ./images/ --output_dir ./output/
-```
-
-#### 递归处理子目录
-
-```bash
-python rm_border.py -i ./project/ --recursive --output_dir ./output/
-```
-
-### 3. 处理矢量格式
-
-#### 处理 PDF（自动光栅化第一页）
+### Vector formats
 
 ```bash
 python rm_border.py -i document.pdf --dpi 300
-```
-
-#### 处理 EPS 文件
-
-```bash
 python rm_border.py -i figure.eps --dpi 600
-```
-
-#### 处理 PostScript 文件
-
-```bash
 python rm_border.py -i diagram.ps
 ```
 
-### 4. 正则重命名
-
-#### 从文件名提取数字并重命名
-
-假设有文件：`figure_01.eps`, `figure_02.eps`, ...
+### Regex rename
 
 ```bash
+# figure_01.eps → clean_01.png
 python rm_border.py -i figure_01.eps \
   --rename_pattern "figure_(\d+)" \
   --rename_template "clean_{1}.png"
-```
 
-输出：`clean_01.png`
-
-#### 复杂重命名示例
-
-从 `report_2024_chart.png` 提取 `2024` 和 `chart`：
-
-```bash
+# report_2024_chart.png → 2024_chart_cropped.png
 python rm_border.py -i report_2024_chart.png \
   --rename_pattern "report_(\d+)_(\w+)" \
   --rename_template "{1}_{2}_cropped"
 ```
 
-输出：`2024_chart_cropped.png`
-
-### 5. 高级用法
-
-#### 输出为 JPEG 格式（去除透明度）
+### Smart auto-detection
 
 ```bash
-python rm_border.py -i image.png --format jpg
-```
-
-#### 处理透明背景 PNG 并保留透明区域
-
-```bash
-python rm_border.py -i transparent.png -p 20
-```
-
-#### 高分辨率光栅化 + 自定义背景色 + 边距
-
-```bash
-python rm_border.py -i vector.pdf \
-  --dpi 600 \
-  --background #F5F5F5 \
-  --padding 15 20 15 20 \
-  --output_dir ./high_res/
-```
-
-#### 批量处理并详细日志
-
-```bash
-python rm_border.py -i ./batch/ -o ./output/ -v
-```
-
-### 6. 智能边界识别
-
-#### 自动检测并去除边界（无需指定背景色）
-
-```bash
+# Auto-detect and remove borders — no background color needed
 python rm_border.py -i image.png -a
-```
 
-#### 自动识别 + 自定义容差
-
-```bash
+# With custom tolerance
 python rm_border.py -i image.png -a -t 15
-```
 
-#### 自动识别 + 保留边距
-
-```bash
+# With padding
 python rm_border.py -i image.png -a -p 5
-```
 
-#### 批量自动识别
-
-```bash
+# Batch auto-detection
 python rm_border.py -i ./images/ -a -r -o ./output/
 ```
 
-> **说明：** `-a` 模式会自动扫描四条边，识别纯色边界段并进行裁剪。适用于不需要指定具体背景色、希望自动处理各种颜色边界的场景。启用 `-a` 时 `--background` 参数将被忽略。
+> When `-a` is enabled, the tool scans all four edges inward to find contiguous
+> solid-color border segments and trims them automatically. The `--background`
+> flag is ignored in this mode.
 
-## 输出文件命名规则
+### Output format
 
-### 默认模式
-```
-输入：image.png
-输出：image_processed.png
-```
-
-### 自定义输出目录
-```
-输入：./src/image.png
-输出：./output/image_processed.png
+```bash
+# Export as JPEG (alpha channel composited onto white)
+python rm_border.py -i image.png -f jpg
 ```
 
-### 正则重命名
-```
-输入：figure_01.eps
-正则：figure_(\d+)
-模板：clean_{1}.png
-输出：clean_01.png
-```
+## Output naming
 
-## 算法说明
+| Scenario | Input | Output |
+|----------|-------|--------|
+| Default | `image.png` | `image_processed.png` |
+| Custom output dir | `./src/image.png` | `./output/image_processed.png` |
+| Regex rename | `figure_01.eps` | `clean_01.png` |
 
-### 边缘检测策略
+## Algorithm
 
-1. **Alpha 通道检测**（优先级最高）
-   - 如果图像包含 Alpha 通道且存在透明区域，直接基于透明度检测内容区域
-   - 如果 Alpha 通道未检测到透明边界（所有像素完全不透明），自动回退到背景色对比检测
-   - 适用于透明背景的 PNG 等格式
+### Edge detection
 
-2. **背景色对比检测**
-   - 创建纯色背景图像
-   - 计算与原图的差异
-   - 应用容差过滤
-   - 提取非背景区域的边界框
+1. **Alpha channel** (highest priority) — If the image has an alpha channel with actual transparent pixels, the content bounding box is derived from transparency. If all pixels are fully opaque (no transparent border), the tool falls through to background-color detection.
 
-### 容差（Tolerance）说明
+2. **Background color comparison** — A solid-color reference image is created from the specified `--background` value. The per-pixel absolute difference is computed via `ImageChops.difference`. Each channel is thresholded against `--tolerance`: channels with difference ≤ tolerance are considered background. `getbbox()` then yields the content bounding box.
 
-容差控制背景色匹配的严格程度：
+### Tolerance
 
-- `ImageChops.difference` 计算每个像素 R/G/B 通道与背景色的绝对差值
-- 每个通道独立判断：差值 > tolerance → 视为内容像素，否则 → 视为背景像素
-- tolerance=10 表示"与背景色任一通道差异超过 10 才算内容"
-- **值越小**越严格（只接受非常接近背景色的像素为背景）
-- **值越大**越宽松（允许更大色差的像素仍被视为背景）
+Tolerance controls how strictly a pixel must match the background color to be treated as background:
 
-### 智能边界识别（`--auto`）
+- `ImageChops.difference` computes the absolute R/G/B difference between each pixel and the background.
+- A pixel is classified as **content** if *any* channel's difference exceeds the tolerance.
+- **Lower** values = stricter (only very close colors count as background).
+- **Higher** values = looser (larger color deviations still count as background).
 
-当启用 `-a` 时，使用四边独立扫描算法：
+### Smart auto-detection (`--auto`)
 
-1. **采样边界颜色**：取每条边最外层行/列的主色调作为候选边界色
-2. **向内扫描**：从每条边向内逐行/列扫描，检查是否为纯色段（≥95% 像素与边界色匹配，容差范围内）
-3. **颜色一致性判断**：
-   - 四色相同 → 四侧都有边界，全部裁剪
-   - 三色相同 → 以相同三色对应的侧边为边界
-   - 两色相同 → 以相同颜色对应的侧边为边界
-   - 全部不同 → 所有检测到纯色段的侧边均视为边界
+When `-a` is enabled, a four-edge independent scan is performed:
 
-### Padding 应用
+1. **Sample edge color** — The dominant color of the outermost row/column on each edge is taken as the candidate border color.
+2. **Scan inward** — Rows (top/bottom) or columns (left/right) are checked sequentially. A row/column is "pure" if ≥ 95 % of its pixels match the candidate border color within tolerance. Scanning stops at the first non-pure row/column.
+3. **Color consistency** — The four detected border colors are compared:
+   - All four identical → all four sides are borders; trim all.
+   - Three identical → trim those three sides.
+   - Two identical → trim those two sides.
+   - All different → every side with a detected pure segment is trimmed independently.
 
-边界框计算完成后，按照用户指定的 padding 值向外扩展：
+### Padding
+
+After the content bounding box is computed, padding is applied by expanding outward:
 
 ```
-最终边界框 = 原始内容边界框 - padding
+final_box = content_box ± padding
 ```
 
-确保不会超出图像实际尺寸。
+Clamped to image boundaries so the crop never exceeds the original dimensions.
 
-## 故障排除
+## Troubleshooting
 
-### 问题 1：Ghostscript 未找到
+| Error | Cause | Fix |
+|-------|-------|-----|
+| EPS/PS rasterization failed | Ghostscript not installed or not in PATH | Install Ghostscript and add its `bin` to PATH |
+| PDF processing failed | pdf2image or poppler missing | `pip install pdf2image` and install poppler |
+| No valid content detected | Background color mismatch or tolerance too low | Check `--background`, increase `--tolerance`, use `-v` |
+| Invalid bounding box | Padding too large for image size | Reduce `--padding` |
 
-**错误信息：**
-```
-EPS/PS 光栅化失败。请安装以下依赖之一...
-```
+## Performance tips
 
-**解决方案：**
-- 确保 Ghostscript 已正确安装
-- 将 Ghostscript 的 `bin` 目录添加到 PATH
-- Windows 验证：`gswin64c --version`
+- Use `-v` to monitor progress during batch runs.
+- Lower `--dpi` (e.g. 150–200) for faster vector rasterization.
+- Ensure ≥ 2 GB free memory when processing very large images.
 
-### 问题 2：PDF 处理失败
+## Changelog
 
-**错误信息：**
-```
-处理 PDF 需要安装 pdf2image 和 poppler
-```
-
-**解决方案：**
-- 安装 pdf2image：`pip install pdf2image`
-- 安装 poppler（见安装部分的系统依赖说明）
-
-### 问题 3：无法检测到有效内容
-
-**错误信息：**
-```
-无法检测到有效内容，图像可能完全是背景色
-```
-
-**解决方案：**
-- 检查背景色设置是否正确
-- 调整容差值：`--tolerance 20`
-- 使用 `--verbose` 查看详细日志
-
-### 问题 4：边界框无效
-
-**错误信息：**
-```
-计算出的边界框无效（padding 可能过大）
-```
-
-**解决方案：**
-- 减小 padding 值
-- 检查图像尺寸是否过小
-
-## 性能优化建议
-
-1. **批量处理大文件**
-   - 使用 `--verbose` 监控进度
-   - 考虑降低 DPI（如 150-200）
-
-2. **内存优化**
-   - 处理超大图像时，确保系统有足够内存
-   - 建议至少 2GB 可用内存
-
-3. **并行处理**（未来版本）
-   - 当前版本为串行处理
-   - 可考虑使用 `multiprocessing` 加速
-
-## 更新日志
+### v1.1.0 (2026-05-13)
+- Fix: `--background` now works correctly on RGBA images where all pixels are fully opaque
+- New: `--auto` / `-a` — intelligent four-edge border detection and removal
+- New: short flags `-t` (tolerance), `-r` (recursive), `-f` (format)
 
 ### v1.0.0 (2026-04-07)
-- ✨ 初始版本发布
-- ✨ 支持 PNG, JPG, BMP, TIFF, EMF, PDF, EPS, PS 格式
-- ✨ Alpha 通道和背景色检测
-- ✨ 灵活的 padding 控制
-- ✨ 正则重命名支持
-- ✨ 完整的错误处理和文档
+- Initial release
+- PNG, JPG, BMP, TIFF, EMF, PDF, EPS, PS support
+- Alpha-channel and background-color detection
+- Flexible padding control
+- Regex rename support
