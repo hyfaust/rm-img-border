@@ -114,10 +114,11 @@ python rm_border.py -i <输入文件或目录> [选项]
 | `--dpi` | - | 矢量格式光栅化 DPI | `300` |
 | `--rename_pattern` | - | 正则表达式模式 | - |
 | `--rename_template` | - | 重命名模板 | - |
-| `--recursive` | - | 递归处理子目录 | `False` |
-| `--format` | - | 输出格式（png/jpg/jpeg/bmp/tiff） | `png` |
-| `--tolerance` | - | 背景色容差 | `10` |
+| `--recursive` | `-r` | 递归处理子目录 | `False` |
+| `--format` | `-f` | 输出格式（png/jpg/jpeg/bmp/tiff） | `png` |
+| `--tolerance` | `-t` | 背景色容差 | `10` |
 | `--verbose` | `-v` | 显示详细调试信息 | `False` |
+| `--auto` | `-a` | 智能识别边界颜色并去除 | `False` |
 
 ## 使用示例
 
@@ -245,6 +246,34 @@ python rm_border.py -i vector.pdf \
 python rm_border.py -i ./batch/ -o ./output/ -v
 ```
 
+### 6. 智能边界识别
+
+#### 自动检测并去除边界（无需指定背景色）
+
+```bash
+python rm_border.py -i image.png -a
+```
+
+#### 自动识别 + 自定义容差
+
+```bash
+python rm_border.py -i image.png -a -t 15
+```
+
+#### 自动识别 + 保留边距
+
+```bash
+python rm_border.py -i image.png -a -p 5
+```
+
+#### 批量自动识别
+
+```bash
+python rm_border.py -i ./images/ -a -r -o ./output/
+```
+
+> **说明：** `-a` 模式会自动扫描四条边，识别纯色边界段并进行裁剪。适用于不需要指定具体背景色、希望自动处理各种颜色边界的场景。启用 `-a` 时 `--background` 参数将被忽略。
+
 ## 输出文件命名规则
 
 ### 默认模式
@@ -272,7 +301,8 @@ python rm_border.py -i ./batch/ -o ./output/ -v
 ### 边缘检测策略
 
 1. **Alpha 通道检测**（优先级最高）
-   - 如果图像包含 Alpha 通道，直接基于透明度检测内容区域
+   - 如果图像包含 Alpha 通道且存在透明区域，直接基于透明度检测内容区域
+   - 如果 Alpha 通道未检测到透明边界（所有像素完全不透明），自动回退到背景色对比检测
    - 适用于透明背景的 PNG 等格式
 
 2. **背景色对比检测**
@@ -280,6 +310,28 @@ python rm_border.py -i ./batch/ -o ./output/ -v
    - 计算与原图的差异
    - 应用容差过滤
    - 提取非背景区域的边界框
+
+### 容差（Tolerance）说明
+
+容差控制背景色匹配的严格程度：
+
+- `ImageChops.difference` 计算每个像素 R/G/B 通道与背景色的绝对差值
+- 每个通道独立判断：差值 > tolerance → 视为内容像素，否则 → 视为背景像素
+- tolerance=10 表示"与背景色任一通道差异超过 10 才算内容"
+- **值越小**越严格（只接受非常接近背景色的像素为背景）
+- **值越大**越宽松（允许更大色差的像素仍被视为背景）
+
+### 智能边界识别（`--auto`）
+
+当启用 `-a` 时，使用四边独立扫描算法：
+
+1. **采样边界颜色**：取每条边最外层行/列的主色调作为候选边界色
+2. **向内扫描**：从每条边向内逐行/列扫描，检查是否为纯色段（≥95% 像素与边界色匹配，容差范围内）
+3. **颜色一致性判断**：
+   - 四色相同 → 四侧都有边界，全部裁剪
+   - 三色相同 → 以相同三色对应的侧边为边界
+   - 两色相同 → 以相同颜色对应的侧边为边界
+   - 全部不同 → 所有检测到纯色段的侧边均视为边界
 
 ### Padding 应用
 

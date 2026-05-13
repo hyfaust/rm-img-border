@@ -27,6 +27,9 @@ rm-border: 批量去除图片白边或透明边缘的命令行工具
     
     # 正则重命名
     python rm_border.py -i figure_01.eps --rename_pattern "figure_(\d+)" --rename_template "clean_{1}.png"
+
+    # 智能识别边界颜色并去除
+    python rm_border.py -i image.png -a
     
     # 自定义 DPI（用于矢量格式）
     python rm_border.py -i document.pdf --dpi 600
@@ -36,6 +39,7 @@ import argparse
 import os
 import re
 import sys
+from collections import Counter
 from pathlib import Path
 from typing import Tuple, Optional, Union, List
 from PIL import Image, ImageChops
@@ -137,16 +141,21 @@ def detect_content_bbox(
         image = image.convert('RGBA')
     
     bbox = None
-    
+
     # 策略 1：如果有 Alpha 通道，基于透明度检测
     if image.mode == 'RGBA':
         # 提取 Alpha 通道
         alpha = image.split()[3]
         # 找到非完全透明的区域
-        bbox = alpha.getbbox()
-        
-        if bbox:
+        alpha_bbox = alpha.getbbox()
+
+        # 仅当 alpha 检测到的边界不等于整个图片时才使用
+        # （等于整个图片说明没有透明边界，应继续走背景色检测）
+        if alpha_bbox and alpha_bbox != (0, 0, image.width, image.height):
+            bbox = alpha_bbox
             logger.debug("使用 Alpha 通道检测边界框")
+        else:
+            logger.debug("Alpha 通道未检测到透明边界，回退到背景色检测")
     
     # 策略 2：如果没有 Alpha 通道或 Alpha 检测失败，基于背景色检测
     if bbox is None:
@@ -197,6 +206,192 @@ def detect_content_bbox(
     )
     
     return (new_left, new_upper, new_right, new_lower)
+
+
+# ============================================================
+# 自动边界检测
+# ============================================================
+
+def _get_dominant_color_row(image: Image.Image, y: int) -> Tuple[int, int, int]:
+    """获取第 y 行的主色调（出现次数最多的颜色）"""
+    row = image.crop((0, y, image.width, y + 1))
+    return Counter(row.getdata()).most_common(1)[0][0]
+
+
+def _get_dominant_color_col(image: Image.Image, x: int) -> Tuple[int, int, int]:
+    """获取第 x 列的主色调（出现次数最多的颜色）"""
+    col = image.crop((x, 0, x + 1, image.height))
+    return Counter(col.getdata()).most_common(1)[0][0]
+
+
+def _is_row_pure(
+    image: Image.Image, y: int,
+    target_color: Tuple[int, int, int],
+    tolerance: int,
+    threshold: float = 0.95
+) -> bool:
+    """检查第 y 行是否为目标颜色的纯色行（匹配像素占比 >= threshold）"""
+    w = image.width
+    row = image.crop((0, y, w, y + 1))
+    bg = Image.new('RGB', (w, 1), target_color)
+    diff = ImageChops.difference(row, bg)
+    diff = diff.point(lambda x: 255 if x > tolerance else 0)
+    gray = diff.convert('L')
+    match_count = gray.histogram()[0]
+    return match_count / w >= threshold
+
+
+def _is_col_pure(
+    image: Image.Image, x: int,
+    target_color: Tuple[int, int, int],
+    tolerance: int,
+    threshold: float = 0.95
+) -> bool:
+    """检查第 x 列是否为目标颜色的纯色列（匹配像素占比 >= threshold）"""
+    h = image.height
+    col = image.crop((x, 0, x + 1, h))
+    bg = Image.new('RGB', (1, h), target_color)
+    diff = ImageChops.difference(col, bg)
+    diff = diff.point(lambda x: 255 if x > tolerance else 0)
+    gray = diff.convert('L')
+    match_count = gray.histogram()[0]
+    return match_count / h >= threshold
+
+
+def _detect_single_edge(
+    image: Image.Image,
+    side: str,
+    tolerance: int,
+    purity_threshold: float
+) -> Tuple[Tuple[int, int, int], int]:
+    """
+    检测单条边的边界颜色和宽度。
+
+    Args:
+        image: RGB 模式的 PIL Image
+        side: 'top' / 'right' / 'bottom' / 'left'
+        tolerance: 颜色容差
+        purity_threshold: 纯色行/列的最低匹配占比
+
+    Returns:
+        (border_color, border_width)
+    """
+    w, h = image.size
+
+    if side == 'top':
+        color = _get_dominant_color_row(image, 0)
+        width = 0
+        for y in range(h):
+            if _is_row_pure(image, y, color, tolerance, purity_threshold):
+                width += 1
+            else:
+                break
+        return color, width
+
+    elif side == 'bottom':
+        color = _get_dominant_color_row(image, h - 1)
+        width = 0
+        for y in range(h - 1, -1, -1):
+            if _is_row_pure(image, y, color, tolerance, purity_threshold):
+                width += 1
+            else:
+                break
+        return color, width
+
+    elif side == 'left':
+        color = _get_dominant_color_col(image, 0)
+        width = 0
+        for x in range(w):
+            if _is_col_pure(image, x, color, tolerance, purity_threshold):
+                width += 1
+            else:
+                break
+        return color, width
+
+    elif side == 'right':
+        color = _get_dominant_color_col(image, w - 1)
+        width = 0
+        for x in range(w - 1, -1, -1):
+            if _is_col_pure(image, x, color, tolerance, purity_threshold):
+                width += 1
+            else:
+                break
+        return color, width
+
+    raise ValueError(f"无效的边方向：{side}")
+
+
+def detect_auto_border(
+    image: Image.Image,
+    tolerance: int = 10,
+    purity_threshold: float = 0.95
+) -> Tuple[int, int, int, int]:
+    """
+    智能识别四条边的边界宽度。
+
+    算法：
+    1. 分别从四条边向内扫描，找到连续纯色段的宽度
+    2. 根据四条边的纯色段颜色进行一致性判断：
+       - 四色相同 → 四侧都有边界
+       - 三色相同 → 以相同三色的侧边为边界
+       - 两色相同 → 以相同颜色的侧边为边界
+       - 全部不同 → 所有检测到纯色段的侧边均视为边界
+
+    Args:
+        image: PIL Image 对象
+        tolerance: 颜色容差
+        purity_threshold: 纯色行/列的最低匹配占比
+
+    Returns:
+        Tuple[int, int, int, int]: (top, right, bottom, left) 各边应裁剪的宽度
+    """
+    rgb = image.convert('RGB')
+    w, h = rgb.size
+
+    # 检测四条边
+    sides = ['top', 'right', 'bottom', 'left']
+    colors = {}
+    widths = {}
+
+    for side in sides:
+        color, width = _detect_single_edge(rgb, side, tolerance, purity_threshold)
+        colors[side] = color
+        widths[side] = width
+        logger.debug(f"自动检测 {side}: 颜色={color}, 宽度={width}")
+
+    # 筛选出有边界的侧边（宽度 > 0）
+    bordered = [s for s in sides if widths[s] > 0]
+
+    if not bordered:
+        logger.debug("自动检测：未发现边界")
+        return (0, 0, 0, 0)
+
+    # 按颜色分组
+    color_groups = {}
+    for side in bordered:
+        c = colors[side]
+        color_groups.setdefault(c, []).append(side)
+
+    # 找到最大的颜色组
+    largest_group = max(color_groups.values(), key=len)
+    side_idx = {'top': 0, 'right': 1, 'bottom': 2, 'left': 3}
+
+    if len(largest_group) >= 2:
+        # 多个侧边共享同一颜色 → 仅裁剪这些侧边
+        result = [0, 0, 0, 0]
+        for side in largest_group:
+            result[side_idx[side]] = widths[side]
+        result = tuple(result)
+        logger.debug(
+            f"自动检测：主色 {colors[largest_group[0]]} 共 {len(largest_group)} 侧，"
+            f"裁剪宽度={result}"
+        )
+        return result
+    else:
+        # 所有侧边颜色各不相同 → 裁剪所有检测到边界的侧边
+        result = tuple(widths[s] for s in sides)
+        logger.debug(f"自动检测：各侧颜色不同，裁剪宽度={result}")
+        return result
 
 
 def rasterize_pdf(
@@ -514,11 +709,12 @@ def process_image(
     padding: Tuple[int, int, int, int],
     dpi: int,
     output_format: str,
-    tolerance: int = 10
+    tolerance: int = 10,
+    auto: bool = False
 ) -> bool:
     """
     处理单个图像文件
-    
+
     Args:
         input_path: 输入文件路径
         output_path: 输出文件路径
@@ -527,15 +723,16 @@ def process_image(
         dpi: 矢量格式光栅化 DPI
         output_format: 输出格式
         tolerance: 颜色容差
-        
+        auto: 是否启用智能边界识别
+
     Returns:
         bool: 处理成功返回 True
     """
     input_path_obj = Path(input_path)
     ext = input_path_obj.suffix.lower()
-    
+
     logger.info(f"处理文件：{input_path}")
-    
+
     try:
         # 根据格式选择处理方式
         if ext == '.pdf':
@@ -551,9 +748,29 @@ def process_image(
         else:
             logger.error(f"不支持的格式：{ext}")
             return False
-        
+
         # 检测边界框并裁剪
-        bbox = detect_content_bbox(image, bg_color, padding, tolerance)
+        if auto:
+            border_top, border_right, border_bottom, border_left = \
+                detect_auto_border(image, tolerance)
+            pad_top, pad_right, pad_bottom, pad_left = padding
+            left = max(0, border_left - pad_left)
+            upper = max(0, border_top - pad_top)
+            right = min(image.width, image.width - border_right + pad_right)
+            lower = min(image.height, image.height - border_bottom + pad_bottom)
+            if right <= left or lower <= upper:
+                logger.warning("自动检测边界后裁剪区域无效，保留原图")
+                bbox = (0, 0, image.width, image.height)
+            else:
+                bbox = (left, upper, right, lower)
+                logger.debug(
+                    f"自动检测边界: top={border_top}, right={border_right}, "
+                    f"bottom={border_bottom}, left={border_left}，"
+                    f"裁剪区域={bbox}"
+                )
+        else:
+            bbox = detect_content_bbox(image, bg_color, padding, tolerance)
+
         cropped = image.crop(bbox)
         
         # 保存输出
@@ -642,6 +859,9 @@ def create_argument_parser() -> argparse.ArgumentParser:
   
   # 输出为 JPEG 格式
   python rm_border.py -i image.png --format jpg
+
+  # 智能识别边界颜色并去除
+  python rm_border.py -i image.png -a
         """,
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -687,20 +907,20 @@ def create_argument_parser() -> argparse.ArgumentParser:
     )
     
     parser.add_argument(
-        '--recursive',
+        '-r', '--recursive',
         action='store_true',
         help='递归处理子目录中的文件'
     )
     
     parser.add_argument(
-        '--format',
+        '-f', '--format',
         default='png',
         choices=['png', 'jpg', 'jpeg', 'bmp', 'tiff'],
         help='输出格式（默认：png）'
     )
     
     parser.add_argument(
-        '--tolerance',
+        '-t', '--tolerance',
         type=int,
         default=10,
         help='背景色容差（默认：10）'
@@ -711,7 +931,13 @@ def create_argument_parser() -> argparse.ArgumentParser:
         action='store_true',
         help='显示详细调试信息'
     )
-    
+
+    parser.add_argument(
+        '-a', '--auto',
+        action='store_true',
+        help='智能识别边界颜色并去除（与 --background 互斥，启用时忽略 --background）'
+    )
+
     return parser
 
 
@@ -764,7 +990,8 @@ def main():
                 padding,
                 args.dpi,
                 args.format,
-                args.tolerance
+                args.tolerance,
+                auto=args.auto
             ):
                 success_count += 1
             else:
